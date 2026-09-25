@@ -109,7 +109,8 @@ function setup() {
   const form = FormApp.openById(CONFIG.TRIAL_FORM_ID);
   let uidItem = findItem_(form, CONFIG.UID_ITEM_TITLE);
   if (!uidItem) {
-    uidItem = form.addTextItem().setTitle(CONFIG.UID_ITEM_TITLE).setHelpText(CONFIG.UID_ITEM_HELP).setRequired(false);
+    form.addTextItem().setTitle(CONFIG.UID_ITEM_TITLE).setHelpText(CONFIG.UID_ITEM_HELP).setRequired(false);
+    uidItem = findItem_(form, CONFIG.UID_ITEM_TITLE);
     Logger.log('体験申込フォームの最後に「' + CONFIG.UID_ITEM_TITLE + '」欄を追加しました。');
   }
   let res = form.createResponse().withItemResponse(uidItem.asTextItem().createResponse('__UID__'));
