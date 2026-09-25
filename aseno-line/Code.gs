@@ -7,6 +7,7 @@
  *  2. 答えをスプレッドシートの「LINE友だち」シートに1人1行で記録する
  *  3. 答えに合わせて、学年とLINE受付番号が入った体験申込フォームを案内する
  *  4. 体験申込が届いたら、どのLINE友だちか照合してシートを更新し、LINEでお礼を送る
+ *  5. リッチメニューを置く（installRichMenu）。①無料体験申込を押すと、その人専用の申込ボタンを返す
  *
  * 既存の「アセノ会員連絡」プロジェクトとは別のプロジェクトとして置きます。
  * 既存のメール通知（体験申込→保護者へ自動返信・担当者へ通知）はそのまま動きます。
@@ -31,7 +32,7 @@ const CONFIG = {
   // 体験申込が届いたとき、LINEでお礼を送るか（1通ぶん無料枠を使います）
   PUSH_ON_TRIAL: true,
   // このテキストが送られたら、LINE受付番号入りの体験申込ボタンを返す
-  // （リッチメニュー①のアクションを「テキスト：無料体験申込」にした場合に使います）
+  // （管理画面のリッチメニュー①を「テキスト：無料体験申込」にした場合に使います）
   TRIAL_KEYWORDS: ['無料体験申込'],
 
   // 友だち追加直後のあいさつ（{name} はLINEの表示名に置き換わります）
@@ -79,6 +80,24 @@ const GRADE_TO_FORM = {
   '年中以下': '園児', '年長': '園児',
   '小1': '小学1年生', '小2': '小学2年生', '小3': '小学3年生',
   '小4': '小学4年生', '小5': '小学5年生', '小6': '小学6年生',
+};
+
+// リッチメニュー（installRichMenu で置く）。画像は 2500×1686 を 3列×2段に分けたもの。
+// ボタンは左上から右へ、上の段→下の段の順。
+// 変えたいときはここを書き換えて installRichMenu をもう一度実行します。
+// 管理画面で作ったリッチメニューに戻したいときは removeRichMenu を実行します。
+const RICHMENU = {
+  name: 'アセノ 見込み客メニュー',
+  chatBarText: 'メニュー',
+  imageUrl: 'https://raw.githubusercontent.com/takafumisuzuki1117-sys/utage_koutiku/claude/zealous-davinci-ful2u4/aseno-line/richmenu.png',
+  buttons: [
+    { type: 'postback', label: '無料体験申込', data: 'action=trial', displayText: '無料体験申込' },
+    { type: 'message', label: '送迎について', text: '送迎について' },
+    { type: 'message', label: '今月の予定', text: '今月の予定' },
+    { type: 'message', label: 'お問い合わせ', text: 'お問い合わせ' },
+    { type: 'uri', label: 'Instagram', uri: 'https://www.instagram.com/aseno_sc/' },
+    { type: 'uri', label: 'ホームページ', uri: 'http://www.aseno.co.jp/' },
+  ],
 };
 
 // 「LINE友だち」シートの列（並べ替え・列の追加をしても動きます）
@@ -214,6 +233,11 @@ function onFollow_(ev, uid) {
 // 質問のボタンが押された
 function onPostback_(ev, uid) {
   const d = parseData_(ev.postback && ev.postback.data);
+  if (d.action === 'trial') {
+    // リッチメニュー①「無料体験申込」
+    const row = getRow_(uid) || {};
+    return reply_(ev.replyToken, [trialButton_(uid, row[COL.GRADE], 'こちらから1分ほどで申し込めます（参加費無料）。担当者から2〜3日以内にご連絡します。', '無料体験に申し込む')]);
+  }
   const qi = Number(d.q), vi = Number(d.v);
   const q = QUESTIONS[qi];
   if (!q || !(vi >= 0 && vi < q.options.length)) return;
@@ -277,6 +301,52 @@ function onTrialSubmitLine(e) {
 function askAllFriends() {
   broadcast_([questionMessage_(0, 'アセノサッカークラブです。お子さまに合ったご案内をお届けするため、3つだけ教えてください。\n下のボタンを押すだけで答えられます。')]);
   Logger.log('一斉送信しました。');
+}
+
+// リッチメニューを置く（全員に表示。管理画面で作ったメニューより優先されます）
+function installRichMenu() {
+  const img = UrlFetchApp.fetch(RICHMENU.imageUrl, { muteHttpExceptions: true });
+  if (img.getResponseCode() !== 200) throw new Error('メニュー画像を取得できませんでした: ' + RICHMENU.imageUrl);
+
+  const W = 2500, H = 1686, cols = 3, rows = 2;
+  const cw = Math.floor(W / cols), rh = Math.floor(H / rows);
+  const areas = RICHMENU.buttons.map((b, i) => {
+    const c = i % cols, r = Math.floor(i / cols);
+    const action = Object.assign({}, b);
+    return {
+      bounds: { x: c * cw, y: r * rh, width: c === cols - 1 ? W - c * cw : cw, height: r === rows - 1 ? H - r * rh : rh },
+      action: action,
+    };
+  });
+
+  const res = lineFetch_('post', '/v2/bot/richmenu', {
+    size: { width: W, height: H }, selected: true,
+    name: RICHMENU.name, chatBarText: RICHMENU.chatBarText, areas: areas,
+  });
+  if (res.getResponseCode() !== 200) throw new Error('リッチメニューを作れませんでした: ' + res.getContentText());
+  const id = JSON.parse(res.getContentText()).richMenuId;
+
+  const up = lineFetch_('post', 'https://api-data.line.me/v2/bot/richmenu/' + id + '/content', img.getBlob().setContentType('image/png'));
+  if (up.getResponseCode() !== 200) throw new Error('メニュー画像を登録できませんでした: ' + up.getContentText());
+  const def = lineFetch_('post', '/v2/bot/user/all/richmenu/' + id);
+  if (def.getResponseCode() !== 200) throw new Error('メニューを表示できませんでした: ' + def.getContentText());
+
+  // 前に置いたメニューは片付ける
+  const props = PropertiesService.getScriptProperties();
+  const old = props.getProperty('RICHMENU_ID');
+  if (old && old !== id) lineFetch_('delete', '/v2/bot/richmenu/' + old);
+  props.setProperty('RICHMENU_ID', id);
+  Logger.log('リッチメニューを置きました（' + id + '）。LINEのトーク画面を開き直すと切り替わります。');
+}
+
+// プログラムで置いたリッチメニューを外し、管理画面で作ったメニューに戻す
+function removeRichMenu() {
+  const props = PropertiesService.getScriptProperties();
+  lineFetch_('delete', '/v2/bot/user/all/richmenu');
+  const id = props.getProperty('RICHMENU_ID');
+  if (id) lineFetch_('delete', '/v2/bot/richmenu/' + id);
+  props.deleteProperty('RICHMENU_ID');
+  Logger.log('プログラムのリッチメニューを外しました。管理画面で作ったメニューが表示されます。');
 }
 
 // ================= 共通 =================
@@ -387,14 +457,19 @@ function upsert_(uid, fields) {
 }
 
 // --- LINE Messaging API ---
+// payload がファイル（Blob）ならそのまま、それ以外は JSON で送る
 function lineFetch_(method, path, payload) {
   const token = PropertiesService.getScriptProperties().getProperty('LINE_TOKEN');
   const opt = { method: method, headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true };
-  if (payload) {
+  if (payload && typeof payload.getBytes === 'function') {
+    opt.contentType = payload.getContentType();
+    opt.payload = payload.getBytes();
+  } else if (payload) {
     opt.contentType = 'application/json';
     opt.payload = JSON.stringify(payload);
   }
-  const res = UrlFetchApp.fetch('https://api.line.me' + path, opt);
+  const url = /^https:\/\//.test(path) ? path : 'https://api.line.me' + path;
+  const res = UrlFetchApp.fetch(url, opt);
   if (res.getResponseCode() >= 300) console.error('LINE API ' + path + ' ' + res.getResponseCode() + ' ' + res.getContentText());
   return res;
 }
